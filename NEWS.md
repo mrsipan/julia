@@ -12,6 +12,8 @@ New language features
 Language changes
 ----------------
 
+* The `-->` operator now parses as a `:call` expression like most operators (it used
+  to have its own expression head), and can also be dotted.
 
 Compiler/Runtime improvements
 -----------------------------
