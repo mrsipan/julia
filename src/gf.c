@@ -567,7 +567,7 @@ static jl_value_t *ml_matches(jl_methtable_t *mt, int offs,
                               size_t *min_valid, size_t *max_valid, int *has_ambiguity);
 
 // get the compilation signature specialization for this method
-static void jl_compilation_sig(
+JL_DLLEXPORT void jl_compilation_sig(
     jl_tupletype_t *const tt, // the original tupletype of the call : this is expected to be a relative simple type (no Varags, Union, UnionAll, etc.)
     jl_svec_t *sparams,
     jl_method_t *definition,
@@ -2057,14 +2057,6 @@ JL_DLLEXPORT int jl_compile_hint(jl_tupletype_t *types)
     return 1;
 }
 
-JL_DLLEXPORT jl_value_t *jl_get_spec_lambda(jl_tupletype_t *types, size_t world, size_t *min_valid, size_t *max_valid)
-{
-    jl_method_instance_t *mi = jl_get_specialization1(types, world, min_valid, max_valid, 0);
-    if (!mi)
-        return jl_nothing;
-    return (jl_value_t*)mi;
-}
-
 // add type of `f` to front of argument tuple type
 jl_value_t *jl_argtype_with_function(jl_function_t *f, jl_value_t *types0)
 {
@@ -2417,50 +2409,6 @@ static jl_value_t *jl_gf_invoke_by_method(jl_method_t *method, jl_value_t *gf, j
     JL_GC_PROMISE_ROOTED(mfunc);
     size_t world = jl_get_ptls_states()->world_age;
     return _jl_invoke(gf, args, nargs - 1, mfunc, world);
-}
-
-JL_DLLEXPORT jl_value_t *jl_get_invoke_lambda(jl_method_t *method, jl_value_t *tt)
-{
-    // TODO: refactor this method to be more like `jl_get_specialization1`
-    if (!jl_is_datatype(tt) || !((jl_datatype_t*)tt)->isdispatchtuple)
-        return jl_nothing;
-
-    jl_typemap_entry_t *tm = NULL;
-    struct jl_typemap_assoc search = {(jl_value_t*)tt, 1, NULL, 0, ~(size_t)0};
-    if (method->invokes != NULL) {
-        tm = jl_typemap_assoc_by_type(method->invokes, &search, /*offs*/1, /*subtype*/1);
-        if (tm) {
-            return (jl_value_t*)tm->func.linfo;
-        }
-    }
-
-    JL_LOCK(&method->writelock);
-    if (method->invokes != NULL) {
-        tm = jl_typemap_assoc_by_type(method->invokes, &search, /*offs*/1, /*subtype*/1);
-        if (tm) {
-            jl_method_instance_t *mfunc = tm->func.linfo;
-            JL_UNLOCK(&method->writelock);
-            return (jl_value_t*)mfunc;
-        }
-    }
-
-    jl_svec_t *tpenv = jl_emptysvec;
-    JL_GC_PUSH1(&tpenv);
-    if (jl_is_unionall(method->sig)) {
-        jl_value_t *ti =
-            jl_type_intersection_env(tt, (jl_value_t*)method->sig, &tpenv);
-        assert(ti != (jl_value_t*)jl_bottom_type);
-        (void)ti;
-    }
-
-    if (method->invokes == NULL)
-        method->invokes = jl_nothing;
-
-    jl_method_instance_t *mfunc = cache_method(NULL, &method->invokes, (jl_value_t*)method,
-                                               (jl_tupletype_t*)tt, method, 1, 1, ~(size_t)0, tpenv);
-    JL_GC_POP();
-    JL_UNLOCK(&method->writelock);
-    return (jl_value_t*)mfunc;
 }
 
 // Return value is rooted globally

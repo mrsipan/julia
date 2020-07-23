@@ -118,8 +118,34 @@ function retrieve_code_info(linfo::MethodInstance)
     end
 end
 
+# Get at the nonfunction_mt, which happens to be the mt of SimpleVector
+const nonfunction_mt = typename(SimpleVector).mt
+
+function get_compileable_sig(method::Method, @nospecialize(atypes), sparams::SimpleVector)
+    isa(atypes, DataType) || return Nothing
+    mt = ccall(:jl_method_table_for, Any, (Any,), atypes)
+    mt === nothing && return nothing
+    nspec = mt === typename(Type).mt || mt === nonfunction_mt ?
+        method.nargs + 1 : mt.max_args + 2
+    newparams = RefValue{SimpleVector}()
+    ccall(:jl_compilation_sig, Cvoid, (Any, Any, Any, Int, Any),
+        atypes, sparams, method, nspec, newparams)
+    if isdefined(newparams, :x)
+        atypes = Tuple{newparams[]::SimpleVector...}
+    end
+    if !atypes.isdispatchtuple && ccall(:jl_isa_compileable_sig, Int32, (Any, Any), atypes, method) == 0
+        return nothing
+    end
+    return atypes
+end
+
 # get a handle to the unique specialization object representing a particular instantiation of a call
-function specialize_method(method::Method, @nospecialize(atypes), sparams::SimpleVector, preexisting::Bool=false)
+function specialize_method(method::Method, @nospecialize(atypes), sparams::SimpleVector, preexisting::Bool=false, compilesig::Bool=false)
+    if compilesig
+        new_atypes = get_compileable_sig(method, atypes, sparams)
+        new_atypes === nothing && return nothing
+        atypes = new_atypes
+    end
     if preexisting
         # check cached specializations
         # for an existing result stored there
@@ -128,8 +154,8 @@ function specialize_method(method::Method, @nospecialize(atypes), sparams::Simpl
     return ccall(:jl_specializations_get_linfo, Ref{MethodInstance}, (Any, Any, Any), method, atypes, sparams)
 end
 
-function specialize_method(match::MethodMatch, preexisting::Bool=false)
-    return specialize_method(match.method, match.spec_types, match.sparams, preexisting)
+function specialize_method(match::MethodMatch, preexisting::Bool=false, compilesig::Bool=false)
+    return specialize_method(match.method, match.spec_types, match.sparams, preexisting, compilesig)
 end
 
 # This function is used for computing alternate limit heuristics
