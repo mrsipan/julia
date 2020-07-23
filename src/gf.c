@@ -1661,7 +1661,9 @@ JL_DLLEXPORT void jl_method_table_insert(jl_methtable_t *mt, jl_method_t *method
                 jl_svec_t *specializations = jl_atomic_load_acquire(&m->specializations);
                 jl_method_instance_t **data = (jl_method_instance_t**)jl_svec_data(specializations);
                 size_t i, l = jl_svec_len(specializations);
+                int invalid = 0;
                 int shadowing = 0;
+                int ambig = 0;
                 for (i = 0; i < l; i++) {
                     jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[i]);
                     if (mi == NULL)
@@ -1672,35 +1674,40 @@ JL_DLLEXPORT void jl_method_table_insert(jl_methtable_t *mt, jl_method_t *method
                             if (jl_type_morespecific(m->sig, type))
                                 // not actually shadowing--the existing method is still better
                                 break;
-                            if (!jl_type_morespecific(type, mi->def.method->sig)) {
-                                // adding an ambiguity--see if there already was one
-                                size_t k;
-                                for (k = 0; k < n; k++) {
-                                    jl_method_t *m2 = d[k];
-                                    if (m == m2 || !jl_subtype(isect, m2->sig))
-                                        continue;
-                                    if (k > i) {
-                                        if (jl_type_morespecific(m2->sig, type)) {
-                                            // not actually shadowing this--m2 will still be better
-                                            morespec[k] = 1;
-                                            continue;
-                                        }
-                                    }
-                                    if (!jl_type_morespecific(m->sig, m2->sig) &&
-                                            !jl_type_morespecific(m2->sig, m->sig)) {
+                            shadowing = 1;
+                            ambig = !jl_type_morespecific(type, m->sig);
+                        }
+                        // replacing a method--see if this really was the selected method previously
+                        // over the intersection
+                        if (ambig)  {
+                            size_t k;
+                            for (k = 0; k < n; k++) {
+                                jl_method_t *m2 = d[k];
+                                if (m == m2 || !jl_subtype(isect, m2->sig))
+                                    continue;
+                                if (morespec[k])
+                                    break;
+                                if (k > j) { // possibly haven't actually computed morespec yet
+                                    if (jl_type_morespecific(m2->sig, type)) {
+                                        // not actually shadowing this--m2 will still be better
+                                        morespec[k] = 1;
                                         break;
                                     }
                                 }
-                                if (k != n)
-                                    continue;
+                                // since m2 was also a previous match over isect,
+                                // see if m was also previously dominant over m2
+                                if (!jl_type_morespecific(m->sig, m2->sig))
+                                    break;
                             }
-                            shadowing = 1;
+                            if (k != n)
+                                continue;
                         }
+                        invalid = 1;
                         if (mi->backedges)
                             invalidate_backedges(mi, max_world, "jl_method_table_insert");
                     }
                 }
-                if (shadowing == 0)
+                if (invalid == 0)
                     morespec[j] = 1; // the method won't need to be dropped from any cache
             }
             for (j = 0; j < n; j++) {
